@@ -1,4 +1,4 @@
-**NavigAid**
+## NavigAid
 
 [insert tag line]
 
