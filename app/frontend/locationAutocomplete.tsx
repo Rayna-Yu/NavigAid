@@ -29,7 +29,6 @@ export default function LocationAutocomplete({
     }
 
     const fetchSuggestions = async () => {
-      console.log('ORS API Key:', ORS_API_KEY); // TODO : delete this log at some poitn
       try {
         const response = await fetch(
           `https://api.openrouteservice.org/geocode/autocomplete?api_key=${ORS_API_KEY}&text=${encodeURIComponent(
