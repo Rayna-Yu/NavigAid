@@ -13,6 +13,10 @@ npm install
 npx expo install react-native maps
 npx expo install @expo/vector-icons
 npm install react-native-autocomplete-input   
+npm install @react-navigation/native
+npx expo install react-native-screens react-native-safe-area-context react-native-gesture-handler react-native-reanimated
+npm install @react-navigation/native-stack
+npm install polyline
 ```
 You must have a .env file at the root with an open route service api key like this:
 
