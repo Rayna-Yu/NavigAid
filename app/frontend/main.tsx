@@ -4,7 +4,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Platform,
   ScrollView,
 } from 'react-native';
 import MapView, { Marker, Polyline, LatLng } from 'react-native-maps';
@@ -14,7 +13,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../App';
 import Constants from 'expo-constants';
 import polyline from 'polyline';
-import SettingsSheet from './settingsSheet'; 
+import SettingsSheet from './components/settingsSheet';
 
 const ORS_API_KEY = Constants.expoConfig?.extra?.OPEN_ROUTE_SERVICE_API_KEY;
 const ROUTE_COLORS = ['#007AFF', '#ADD8E6'];
@@ -305,7 +304,7 @@ const styles = StyleSheet.create({
     bottom: 120,
     left: 0,
     right: 0,
-    maxHeight: 100,
+    maxHeight: 130,
     zIndex: 11,
   },
   routeSummary: {
@@ -314,7 +313,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     padding: 10,
     marginHorizontal: 8,
-    minWidth: 140,
+    minWidth: 160,
     elevation: 4,
     shadowColor: '#000',
     shadowOpacity: 0.15,
