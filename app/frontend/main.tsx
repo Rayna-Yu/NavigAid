@@ -1,5 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Keyboard } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Platform,
+  ScrollView,
+} from 'react-native';
 import MapView, { Marker, Polyline, LatLng } from 'react-native-maps';
 import { AntDesign } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -7,8 +14,23 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../App';
 import Constants from 'expo-constants';
 import polyline from 'polyline';
+import SettingsSheet from './settingsSheet'; 
 
 const ORS_API_KEY = Constants.expoConfig?.extra?.OPEN_ROUTE_SERVICE_API_KEY;
+const ROUTE_COLORS = ['#007AFF', '#ADD8E6'];
+
+function formatDuration(seconds: number) {
+  if (seconds < 60) return `${Math.round(seconds)} sec`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  return `${h}h ${m}min`;
+}
+
+function formatDistance(meters: number) {
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  return `${(meters / 1000).toFixed(1)} km`;
+}
 
 export default function Main() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -17,15 +39,21 @@ export default function Main() {
   const [toText, setToText] = useState('');
   const [fromCoords, setFromCoords] = useState<LatLng | null>(null);
   const [toCoords, setToCoords] = useState<LatLng | null>(null);
-  const [routeCoords, setRouteCoords] = useState<LatLng[]>([]);
+  const [routes, setRoutes] = useState<LatLng[][]>([]);
+  const [routeSummaries, setRouteSummaries] = useState<{ distance: number; duration: number }[]>([]);
+  const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
+  const [mapType, setMapType] = useState<'standard' | 'satellite' | 'hybrid' | 'terrain'>('standard');
+  const [hasRouted, setHasRouted] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   const mapRef = useRef<MapView>(null);
 
-  // Fetch walking route when both coordinates are set
   useEffect(() => {
     async function fetchRoute() {
       if (!fromCoords || !toCoords) {
-        setRouteCoords([]);
+        setRoutes([]);
+        setRouteSummaries([]);
+        setSelectedRouteIndex(0);
         return;
       }
 
@@ -36,6 +64,11 @@ export default function Main() {
             [fromCoords.longitude, fromCoords.latitude],
             [toCoords.longitude, toCoords.latitude],
           ],
+          alternative_routes: {
+            target_count: 3,
+            share_factor: 0.5,
+            weight_factor: 2,
+          },
         };
         const response = await fetch(url, {
           method: 'POST',
@@ -45,80 +78,103 @@ export default function Main() {
         const data = await response.json();
 
         if (data.routes && data.routes.length > 0) {
-          // Decode the encoded polyline string
-          const encoded = data.routes[0].geometry;
-          const decoded = polyline.decode(encoded);
+          const decodedRoutes = data.routes.map((route: any) => {
+            const encoded = route.geometry;
+            const decoded = polyline.decode(encoded) as [number, number][];
+            return decoded.map(([lat, lng]: [number, number]) => ({
+              latitude: lat,
+              longitude: lng,
+            }));
+          });
 
-          // Map decoded points to LatLng objects
-          const coords = decoded.map(([lat, lng]) => ({
-            latitude: lat,
-            longitude: lng,
+          const summaries = data.routes.map((route: any) => ({
+            distance: route.summary.distance,
+            duration: route.summary.duration,
           }));
 
-          setRouteCoords(coords);
+          setRoutes(decodedRoutes);
+          setRouteSummaries(summaries);
+          setSelectedRouteIndex(0);
+          setHasRouted(true);
 
           if (mapRef.current) {
-            mapRef.current.fitToCoordinates(coords, {
-              edgePadding: { top: 300, bottom: 50, left: 50, right: 50 },
+            const allCoords = decodedRoutes.flat();
+            mapRef.current.fitToCoordinates(allCoords, {
+              edgePadding: { top: 300, bottom: 150, left: 50, right: 50 },
               animated: true,
             });
           }
         } else {
-          setRouteCoords([]);
+          setRoutes([]);
+          setRouteSummaries([]);
+          setSelectedRouteIndex(0);
         }
       } catch (e) {
         console.error('Route fetch error:', e);
-        setRouteCoords([]);
+        setRoutes([]);
+        setRouteSummaries([]);
+        setSelectedRouteIndex(0);
       }
     }
 
     fetchRoute();
   }, [fromCoords, toCoords]);
 
-  // Adjust map view when locations change (for single points)
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapRef.current || hasRouted) return;
 
-    if (fromCoords && toCoords) {
-      // Map view is fitted already in fetchRoute after route loads
-      return;
-    } else if (fromCoords) {
+    const target = fromCoords || toCoords;
+    if (target) {
       mapRef.current.animateToRegion(
         {
-          ...fromCoords,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        },
-        1000
-      );
-    } else if (toCoords) {
-      mapRef.current.animateToRegion(
-        {
-          ...toCoords,
+          ...target,
           latitudeDelta: 0.01,
           longitudeDelta: 0.01,
         },
         1000
       );
     }
-  }, [fromCoords, toCoords]);
+  }, [fromCoords, toCoords, hasRouted]);
 
   return (
     <View style={{ flex: 1 }}>
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
+        mapType={mapType}
         initialRegion={{
-          latitude: 37.78825,
-          longitude: -122.4324,
+          latitude: 42.3555,
+          longitude: -71.0565,
           latitudeDelta: 0.0922,
           longitudeDelta: 0.0421,
         }}
       >
         {fromCoords && <Marker coordinate={fromCoords} title="From" />}
         {toCoords && <Marker coordinate={toCoords} title="To" />}
-        {routeCoords.length > 0 && (
-          <Polyline coordinates={routeCoords} strokeColor="#007AFF" strokeWidth={6} />
+
+        {routes.map((routeCoords, i) => {
+          if (i === selectedRouteIndex) return null;
+          return (
+            <Polyline
+              key={`route-alt-${i}`}
+              coordinates={routeCoords}
+              strokeColor={ROUTE_COLORS[1]}
+              strokeWidth={3}
+              tappable
+              onPress={() => setSelectedRouteIndex(i)}
+            />
+          );
+        })}
+
+        {routes[selectedRouteIndex] && (
+          <Polyline
+            key={`route-selected-${selectedRouteIndex}`}
+            coordinates={routes[selectedRouteIndex]}
+            strokeColor={ROUTE_COLORS[0]}
+            strokeWidth={5}
+            tappable
+            onPress={() => setSelectedRouteIndex(selectedRouteIndex)}
+          />
         )}
       </MapView>
 
@@ -130,6 +186,7 @@ export default function Main() {
               onSelect: (coords, label) => {
                 setFromCoords(coords);
                 setFromText(label);
+                setHasRouted(false);
               },
             })
           }
@@ -149,6 +206,7 @@ export default function Main() {
               onSelect: (coords, label) => {
                 setToCoords(coords);
                 setToText(label);
+                setHasRouted(false);
               },
             })
           }
@@ -159,6 +217,48 @@ export default function Main() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      <View style={styles.gearContainer}>
+        <TouchableOpacity onPress={() => setShowSettings(true)} style={styles.gearButton}>
+          <AntDesign name="setting" size={20} color="white" />
+        </TouchableOpacity>
+      </View>
+
+      {routeSummaries.length > 0 && (
+        <ScrollView
+          horizontal
+          style={styles.routeSummaryContainer}
+          contentContainerStyle={{ paddingHorizontal: 10 }}
+          showsHorizontalScrollIndicator={false}
+        >
+          {routeSummaries.map((summary, i) => (
+            <TouchableOpacity
+              key={`summary-${i}`}
+              style={[
+                styles.routeSummary,
+                {
+                  borderColor: i === selectedRouteIndex ? ROUTE_COLORS[0] : '#ccc',
+                  backgroundColor: i === selectedRouteIndex ? '#e6f0ff' : 'white',
+                },
+              ]}
+              onPress={() => setSelectedRouteIndex(i)}
+            >
+              <Text style={styles.routeSummaryTitle}>
+                {i === 0 ? 'Primary Route' : `Alt Route ${i}`}
+              </Text>
+              <Text>Distance: {formatDistance(summary.distance)}</Text>
+              <Text>Time: {formatDuration(summary.duration)}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+
+      <SettingsSheet
+        visible={showSettings}
+        onClose={() => setShowSettings(false)}
+        mapType={mapType}
+        setMapType={setMapType}
+      />
     </View>
   );
 }
@@ -176,6 +276,7 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 10,
+    zIndex: 10,
   },
   label: {
     fontWeight: '600',
@@ -198,5 +299,43 @@ const styles = StyleSheet.create({
   },
   arrow: {
     alignSelf: 'center',
+  },
+  routeSummaryContainer: {
+    position: 'absolute',
+    bottom: 120,
+    left: 0,
+    right: 0,
+    maxHeight: 100,
+    zIndex: 11,
+  },
+  routeSummary: {
+    backgroundColor: 'white',
+    borderWidth: 2,
+    borderRadius: 15,
+    padding: 10,
+    marginHorizontal: 8,
+    minWidth: 140,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+  },
+  routeSummaryTitle: {
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  gearContainer: {
+    position: 'absolute',
+    top: 260,
+    right: 30,
+    zIndex: 15,
+  },
+  gearButton: {
+    backgroundColor: '#007AFF',
+    padding: 10,
+    borderRadius: 20,
+    elevation: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
