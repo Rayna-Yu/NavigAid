@@ -18,11 +18,10 @@ import * as FileSystem from 'expo-file-system';
 import { Asset } from 'expo-asset';
 
 import * as turf from '@turf/turf';
-import { filterSidewalksByBBox } from '../utils/geoUtils';
 
 const ORS_API_KEY = Constants.expoConfig?.extra?.OPEN_ROUTE_SERVICE_API_KEY;
 const ROUTE_COLORS = ['#007AFF', '#ADD8E6'];
-const TOLERANCE_METERS = 100;
+const PROXIMITY_TOLERANCE_METERS = 15;
 
 function formatDuration(seconds: number) {
   if (seconds < 60) return `${Math.round(seconds)} sec`;
@@ -37,10 +36,30 @@ function formatDistance(meters: number) {
   return `${(meters / 1000).toFixed(1)} km`;
 }
 
+function iconForFlag(issue: string) {
+  if (issue.includes('damage')) return { label: 'Damage', color: 'red' };
+  if (issue.includes('Narrow sidewalk')) return { label: 'Narrow', color: 'purple' };
+  if (issue.includes('Steep slope')) return { label: 'Steep', color: 'orange' };
+  if (issue.includes('Poor lighting')) return { label: 'Lighting', color: 'gray' };
+  if (issue.includes('Good shade')) return { label: 'Shade', color: 'green' }; // TODO : same color as ramp
+  if (issue.includes('Near By Pedestrian Ramp')) return { label: 'Ramp', color: 'limegreen' };
+  return { label: 'Issue', color: 'black' };
+}
+
 type Flag = {
   index: number;
   coord: LatLng;
   issue: string;
+};
+
+type RouteAccessibilitySummary = {
+  totalFlags: number;
+  damage: 'low' | 'moderate' | 'high';
+  slope: 'ok' | 'steep';
+  lighting: 'poor' | 'moderate' | 'good';
+  treeCover: 'none' | 'moderate' | 'dense';
+  ramp: 'missing' | 'present';
+  width: 'narrow' | 'ok';
 };
 
 export default function Main() {
@@ -51,37 +70,89 @@ export default function Main() {
   const [fromCoords, setFromCoords] = useState<LatLng | null>(null);
   const [toCoords, setToCoords] = useState<LatLng | null>(null);
   const [routes, setRoutes] = useState<LatLng[][]>([]);
-  const [routeSummaries, setRouteSummaries] = useState<{ distance: number; duration: number }[]>([]);
+  const [routeSummaries, setRouteSummaries] = useState<
+    { distance: number; duration: number; score: number; accessibilitySummary: RouteAccessibilitySummary }[]
+  >([]);
+  const [routeAccessibilitySummaries, setRouteAccessibilitySummaries] = useState<RouteAccessibilitySummary[]>([]);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [mapType, setMapType] = useState<'standard' | 'satellite' | 'hybrid' | 'terrain'>('standard');
   const [hasRouted, setHasRouted] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [flags, setFlags] = useState<Flag[]>([]);
+  const [allFlags, setAllFlags] = useState<Flag[][]>([]);
   const mapRef = useRef<MapView>(null);
-  const [sidewalks, setSidewalks] = useState<any>(null);
 
+  const [sidewalks, setSidewalks] = useState<any>(null);
+  const [streetLamps, setStreetLamps] = useState<any>(null);
+  const [trees, setTrees] = useState<any>(null);
+  const [ramps, setRamps] = useState<any>(null);
+
+  // Load datasets on mount
   useEffect(() => {
-    const loadSidewalks = async () => {
+    const loadDatasets = async () => {
       try {
-        const asset = Asset.fromModule(require('../../../assets/sidewalks.geojson'));
-        await asset.downloadAsync(); // ensure file is local
-        const fileUri = asset.localUri!;
-        const geojsonString = await FileSystem.readAsStringAsync(fileUri);
-        const parsed = JSON.parse(geojsonString);
-        setSidewalks(parsed);
+        // Sidewalks
+        const sidewalksAsset = Asset.fromModule(require('../../../assets/datasets/sidewalks.geojson'));
+        await sidewalksAsset.downloadAsync();
+        const sidewalksStr = await FileSystem.readAsStringAsync(sidewalksAsset.localUri!);
+        setSidewalks(JSON.parse(sidewalksStr));
+
+        // Street lamps
+        const lampsAsset = Asset.fromModule(require('../../../assets/datasets/streetlight_locations.geojson'));
+        await lampsAsset.downloadAsync();
+        const lampsStr = await FileSystem.readAsStringAsync(lampsAsset.localUri!);
+        setStreetLamps(JSON.parse(lampsStr));
+
+        // Trees
+        const treesAsset = Asset.fromModule(require('../../../assets/datasets/trees_data.geojson'));
+        await treesAsset.downloadAsync();
+        const treesStr = await FileSystem.readAsStringAsync(treesAsset.localUri!);
+        setTrees(JSON.parse(treesStr));
+
+        // Pedestrian ramps
+        const rampsAsset = Asset.fromModule(require('../../../assets/datasets/pedestrian_ramp_inventory.geojson'));
+        await rampsAsset.downloadAsync();
+        const rampsStr = await FileSystem.readAsStringAsync(rampsAsset.localUri!);
+        setRamps(JSON.parse(rampsStr));
       } catch (err) {
-        console.error('Failed to load sidewalks.geojson:', err);
+        console.error('Failed to load datasets:', err);
       }
     };
-
-    loadSidewalks();
+    loadDatasets();
   }, []);
 
-  function flagRoute(routeCoords: LatLng[], sidewalkFeatures: any[]) {
-    const flags: Flag[] = [];
-    const TOLERANCE_METERS = 5;
-    const bufferDegrees = TOLERANCE_METERS / 111000;
+  // Count nearby features helper
+  function countNearbyFeatures(point: LatLng, features: any[], maxDistanceMeters: number) {
+    return features.reduce((count, feature) => {
+      if (!feature.geometry) return count;
+      const pt = turf.point([point.longitude, point.latitude]);
+      let isNear = false;
 
+      if (feature.geometry.type === 'Point') {
+        const featurePt = turf.point(feature.geometry.coordinates);
+        const dist = turf.distance(pt, featurePt, { units: 'meters' });
+        isNear = dist <= maxDistanceMeters;
+      } else if (feature.geometry.type === 'Polygon' || feature.geometry.type === 'MultiPolygon') {
+        const poly = feature.geometry.type === 'Polygon'
+          ? turf.polygon(feature.geometry.coordinates)
+          : turf.multiPolygon(feature.geometry.coordinates);
+        isNear = turf.booleanPointInPolygon(pt, poly);
+      }
+
+      return isNear ? count + 1 : count;
+    }, 0);
+  }
+
+  // Flag route features
+  function flagRoute(
+    routeCoords: LatLng[],
+    sidewalkFeatures: any[],
+    lampFeatures: any[],
+    treeFeatures: any[],
+    rampFeatures: any[]
+  ): Flag[] {
+    const flags: Flag[] = [];
+    const bufferDegrees = PROXIMITY_TOLERANCE_METERS / 111000;
     const line = turf.lineString(routeCoords.map(c => [c.longitude, c.latitude]));
     const routeBbox = turf.bbox(line);
     const bufferedBbox = [
@@ -95,72 +166,105 @@ export default function Main() {
       return !(b2[0] > b1[2] || b2[2] < b1[0] || b2[1] > b1[3] || b2[3] < b1[1]);
     }
 
-    const filteredSidewalks = sidewalkFeatures.filter((feature) => {
-      if (!feature.geometry) return false;
-      const bbox = turf.bbox(feature);
-      return bboxIntersects(bufferedBbox, bbox);
-    });
+    const filteredSidewalks = sidewalkFeatures.filter(f => f.geometry && bboxIntersects(bufferedBbox, turf.bbox(f)));
+    const filteredLamps = lampFeatures.filter(f => f.geometry && bboxIntersects(bufferedBbox, turf.bbox(f)));
+    const filteredTrees = treeFeatures.filter(f => f.geometry && bboxIntersects(bufferedBbox, turf.bbox(f)));
+    const filteredRamps = rampFeatures.filter(f => f.geometry && bboxIntersects(bufferedBbox, turf.bbox(f)));
 
     for (let i = 0; i < routeCoords.length; i++) {
       const coord = routeCoords[i];
       const pt = turf.point([coord.longitude, coord.latitude]);
-      let nearby = false;
 
-      for (const feature of filteredSidewalks) {
-        const geometry = feature.geometry;
-        const props = feature.properties || {};
-        if (!geometry) continue;
+      // Sidewalk flags
+      for (const sidewalk of filteredSidewalks) {
+        const geom = sidewalk.geometry;
+        const props = sidewalk.properties || {};
+        if (!geom) continue;
 
-        let isNear = false;
-
-        if (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon') {
-          const polygon = geometry.type === 'Polygon'
-            ? turf.polygon(geometry.coordinates)
-            : turf.multiPolygon(geometry.coordinates);
-
-          // Fast check: is point inside the sidewalk polygon
-          if (turf.booleanPointInPolygon(pt, polygon)) {
-            isNear = true;
-          }
-        } else if (geometry.type === 'LineString') {
-          const line = turf.lineString(geometry.coordinates);
-          const dist = turf.pointToLineDistance(pt, line, { units: 'meters' });
-          if (dist <= TOLERANCE_METERS) {
-            isNear = true;
-          }
+        let nearSidewalk = false;
+        if (geom.type === 'Polygon' || geom.type === 'MultiPolygon') {
+          const polygon = geom.type === 'Polygon' ? turf.polygon(geom.coordinates) : turf.multiPolygon(geom.coordinates);
+          if (turf.booleanPointInPolygon(pt, polygon)) nearSidewalk = true;
+        } else if (geom.type === 'LineString') {
+          const lineGeom = turf.lineString(geom.coordinates);
+          if (turf.pointToLineDistance(pt, lineGeom, { units: 'meters' }) <= PROXIMITY_TOLERANCE_METERS) nearSidewalk = true;
         }
 
-        if (isNear) {
-          nearby = true;
-
+        if (nearSidewalk) {
           const width = Number(props.SWK_WIDTH);
-          const damArea = Number(props.DAM_AREA);
-          const damLength = Number(props.DAM_LENGTH);
-
           if (!isNaN(width) && width < 5) {
             flags.push({ index: i, coord, issue: `Narrow sidewalk (${width} ft)` });
           }
 
-          if ((!isNaN(damArea) && damArea > 1000) || (!isNaN(damLength) && damLength > 1000)) {
-            flags.push({ index: i, coord, issue: `Poor sidewalk condition (damage detected)` });
+          const slope = Number(props.SWK_SLOPE);
+          if (!isNaN(slope) && slope > 8) {
+            flags.push({ index: i, coord, issue: `Steep slope (${slope}%)` });
           }
 
-          break; // Stop checking more sidewalks for this point
+          const damArea = Number(props.DAM_AREA);
+          const damLength = Number(props.DAM_LENGTH);
+          if ((!isNaN(damArea) && damArea > 1000) || (!isNaN(damLength) && damLength > 1000)) {
+            flags.push({ index: i, coord, issue: 'Poor sidewalk condition (damage detected)' });
+          }
+          break;
         }
+      }
+
+      const latLngPt = { latitude: coord.latitude, longitude: coord.longitude };
+
+      // Lighting flags
+      const nearbyLampsCount = countNearbyFeatures(latLngPt, filteredLamps, PROXIMITY_TOLERANCE_METERS);
+      if (nearbyLampsCount === 0) {
+        flags.push({ index: i, coord, issue: 'Poor lighting (no street lamps nearby)' });
+      }
+
+      // Shade flags
+      const nearbyTreesCount = countNearbyFeatures(latLngPt, filteredTrees, PROXIMITY_TOLERANCE_METERS);
+      if (nearbyTreesCount >= 3) {
+        flags.push({ index: i, coord, issue: 'Good shade (tree canopy)' });
+      }
+
+      // Ramp flags
+      const nearbyRampsCount = countNearbyFeatures(latLngPt, filteredRamps, PROXIMITY_TOLERANCE_METERS);
+      if (nearbyRampsCount > 0) {
+        flags.push({ index: i, coord, issue: 'Near By Pedestrian Ramp' });
       }
     }
 
     return flags;
   }
 
+  // Summarize flags for UI
+  function summarizeRouteFlags(flags: Flag[]): RouteAccessibilitySummary {
+    const totalFlags = flags.length;
 
+    const damageCount = flags.filter(f => f.issue.includes('damage')).length;
+    const narrowCount = flags.filter(f => f.issue.includes('Narrow sidewalk')).length;
+    const slopeCount = flags.filter(f => f.issue.includes('Steep slope')).length;
+    const poorLightingCount = flags.filter(f => f.issue.includes('Poor lighting')).length;
+    const goodShadeCount = flags.filter(f => f.issue.includes('Good shade')).length;
+    const missingRampCount = flags.filter(f => f.issue.includes('Missing pedestrian ramp')).length;
+
+    const damage = damageCount > 3 ? 'high' : damageCount > 0 ? 'moderate' : 'low';
+    const slope = slopeCount > 0 ? 'steep' : 'ok';
+    const lighting = poorLightingCount > 2 ? 'poor' : poorLightingCount > 0 ? 'moderate' : 'good';
+    const treeCover = goodShadeCount > 5 ? 'dense' : goodShadeCount > 1 ? 'moderate' : 'none';
+    const ramp = missingRampCount > 3 ? 'missing' : 'present';
+    const width = narrowCount > 2 ? 'narrow' : 'ok';
+
+    return { totalFlags, damage, slope, lighting, treeCover, ramp, width };
+  }
+
+  // Fetch routes when coords change
   useEffect(() => {
     async function fetchRoute() {
-      if (!fromCoords || !toCoords) {
+      if (!fromCoords || !toCoords || !sidewalks?.features || !streetLamps?.features || !trees?.features || !ramps?.features) {
         setRoutes([]);
         setRouteSummaries([]);
+        setRouteAccessibilitySummaries([]);
         setSelectedRouteIndex(0);
         setFlags([]);
+        setAllFlags([]);
         return;
       }
 
@@ -177,11 +281,13 @@ export default function Main() {
             weight_factor: 2,
           },
         };
+
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
+
         const data = await response.json();
 
         if (data.routes && data.routes.length > 0) {
@@ -194,50 +300,76 @@ export default function Main() {
             }));
           });
 
-          const summaries = data.routes.map((route: any) => ({
-            distance: route.summary?.distance ?? 0,
-            duration: route.summary?.duration ?? 0,
-          }));
+          const flaggedRoutes = decodedRoutes.map((coords: LatLng[], idx: number) => {
+            const flagList = flagRoute(coords, sidewalks.features, streetLamps.features, trees.features, ramps.features);
+            return {
+              index: idx,
+              coords,
+              flags: flagList,
+              score: flagList.length, // TODO : better scoring
+            };
+          });
 
-          setRoutes(decodedRoutes);
+          // Sort by least issues
+          const bestThree = flaggedRoutes.sort((a, b) => a.score - b.score).slice(0, 3);
+
+          const summaries = bestThree.map(r => {
+            const origSummary = data.routes[r.index].summary;
+            return {
+              distance: origSummary?.distance ?? 0,
+              duration: origSummary?.duration ?? 0,
+              score: r.score,
+              accessibilitySummary: summarizeRouteFlags(r.flags),
+            };
+          });
+
+          setRoutes(bestThree.map(r => r.coords));
           setRouteSummaries(summaries);
+          setRouteAccessibilitySummaries(summaries.map(s => s.accessibilitySummary));
+          setAllFlags(bestThree.map(r => r.flags));
           setSelectedRouteIndex(0);
+          setFlags(bestThree[0].flags);
           setHasRouted(true);
 
           if (mapRef.current) {
-            const allCoords = decodedRoutes.flat();
+            const allCoords = bestThree.flatMap(r => r.coords);
             mapRef.current.fitToCoordinates(allCoords, {
               edgePadding: { top: 300, bottom: 150, left: 50, right: 50 },
               animated: true,
             });
           }
-
-          // TODO: Flag sidewalks on first route for now will do more later
-          if (decodedRoutes.length > 0 && sidewalks?.features) {
-            const routeFlags = flagRoute(decodedRoutes[0], sidewalks.features);
-            setFlags(routeFlags);
-          }
-
-          const routeFlags = flagRoute(decodedRoutes[0], sidewalks.features);
-          setFlags(routeFlags);
         } else {
           setRoutes([]);
           setRouteSummaries([]);
+          setRouteAccessibilitySummaries([]);
           setSelectedRouteIndex(0);
           setFlags([]);
+          setAllFlags([]);
         }
       } catch (e) {
         console.error('Route fetch error:', e);
         setRoutes([]);
         setRouteSummaries([]);
+        setRouteAccessibilitySummaries([]);
         setSelectedRouteIndex(0);
         setFlags([]);
+        setAllFlags([]);
       }
     }
 
     fetchRoute();
-  }, [fromCoords, toCoords]);
+  }, [fromCoords, toCoords, sidewalks, streetLamps, trees, ramps]);
 
+  // Update flags when selected route changes
+  useEffect(() => {
+    if (allFlags.length > 0) {
+      setFlags(allFlags[selectedRouteIndex] || []);
+    } else {
+      setFlags([]);
+    }
+  }, [selectedRouteIndex, allFlags]);
+
+  // Animate map to start on load
   useEffect(() => {
     if (!mapRef.current || hasRouted) return;
 
@@ -256,6 +388,47 @@ export default function Main() {
 
   return (
     <View style={{ flex: 1 }}>
+      {/* SEARCH BOX */}
+      <View style={styles.searchBox}>
+        <Text style={styles.label}>From:</Text>
+        <TouchableOpacity
+          onPress={() =>
+            navigation.navigate('Search', {
+              onSelect: (coords: LatLng, label: string) => {
+                setFromCoords(coords);
+                setFromText(label);
+                setHasRouted(false);
+              },
+            })
+          }
+          style={styles.inputBox}
+        >
+          <Text style={fromText ? styles.inputText : styles.placeholderText}>
+            {fromText || 'Start location'}
+          </Text>
+        </TouchableOpacity>
+
+        <AntDesign name="arrowdown" size={24} color="black" style={styles.arrow} />
+
+        <Text style={styles.label}>To:</Text>
+        <TouchableOpacity
+          onPress={() =>
+            navigation.navigate('Search', {
+              onSelect: (coords: LatLng, label: string) => {
+                setToCoords(coords);
+                setToText(label);
+                setHasRouted(false);
+              },
+            })
+          }
+          style={styles.inputBox}
+        >
+          <Text style={toText ? styles.inputText : styles.placeholderText}>
+            {toText || 'Destination'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
@@ -290,96 +463,51 @@ export default function Main() {
             coordinates={routes[selectedRouteIndex]}
             strokeColor={ROUTE_COLORS[0]}
             strokeWidth={5}
-            tappable
-            onPress={() => setSelectedRouteIndex(selectedRouteIndex)}
           />
         )}
 
-        {/* Flagged points */}
-        {flags.map((flag, idx) => (
-          <Marker
-            key={`flag-${idx}`}
-            coordinate={flag.coord}
-            pinColor="red"
-            title={flag.issue}
-          />
-        ))}
+        {/* Markers for flagged points on selected route */}
+        {flags.map((flag, idx) => {
+          const { label, color } = iconForFlag(flag.issue);
+          return (
+            <Marker
+              key={`flag-${idx}`}
+              coordinate={flag.coord}
+              pinColor={color}
+              title={label}
+              description={flag.issue}
+            />
+          );
+        })}
       </MapView>
 
-      <View style={styles.searchBox}>
-        <Text style={styles.label}>From:</Text>
-        <TouchableOpacity
-          onPress={() =>
-            navigation.navigate('Search', {
-              onSelect: (coords, label) => {
-                setFromCoords(coords);
-                setFromText(label);
-                setHasRouted(false);
-              },
-            })
-          }
-          style={styles.inputBox}
-        >
-          <Text style={fromText ? styles.inputText : styles.placeholderText}>
-            {fromText || 'Start location'}
-          </Text>
-        </TouchableOpacity>
-
-        <AntDesign name="arrowdown" size={24} color="black" style={styles.arrow} />
-
-        <Text style={styles.label}>To:</Text>
-        <TouchableOpacity
-          onPress={() =>
-            navigation.navigate('Search', {
-              onSelect: (coords, label) => {
-                setToCoords(coords);
-                setToText(label);
-                setHasRouted(false);
-              },
-            })
-          }
-          style={styles.inputBox}
-        >
-          <Text style={toText ? styles.inputText : styles.placeholderText}>
-            {toText || 'Destination'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.gearContainer}>
-        <TouchableOpacity onPress={() => setShowSettings(true)} style={styles.gearButton}>
-          <AntDesign name="setting" size={20} color="white" />
-        </TouchableOpacity>
-      </View>
-
-      {routeSummaries.length > 0 && (
-        <ScrollView
-          horizontal
-          style={styles.routeSummaryContainer}
-          contentContainerStyle={{ paddingHorizontal: 10 }}
-          showsHorizontalScrollIndicator={false}
-        >
+      <View style={styles.routeSummaryContainer}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           {routeSummaries.map((summary, i) => (
             <TouchableOpacity
               key={`summary-${i}`}
               style={[
                 styles.routeSummary,
-                {
-                  borderColor: i === selectedRouteIndex ? ROUTE_COLORS[0] : '#ccc',
-                  backgroundColor: i === selectedRouteIndex ? '#e6f0ff' : 'white',
-                },
+                i === selectedRouteIndex && styles.selectedRouteSummary,
               ]}
               onPress={() => setSelectedRouteIndex(i)}
             >
-              <Text style={styles.routeSummaryTitle}>
-                {i === 0 ? 'Primary Route' : `Alt Route ${i}`}
+              <Text style={styles.routeSummaryText}>
+                Distance: {formatDistance(summary.distance)} {'\n'}
+                Duration: {formatDuration(summary.duration)} {'\n'}
+                Number of Flags: {summary.score} 
               </Text>
-              <Text>Distance: {formatDistance(summary.distance)}</Text>
-              <Text>Time: {formatDuration(summary.duration)}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
-      )}
+      </View>
+
+      <TouchableOpacity
+        onPress={() => setShowSettings(true)}
+        style={styles.settingsButton}
+      >
+        <AntDesign name="setting" size={24} color="black" />
+      </TouchableOpacity>
 
       <SettingsSheet
         visible={showSettings}
@@ -404,7 +532,7 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 10,
-    zIndex: 10,
+    zIndex: 1000,
   },
   label: {
     fontWeight: '600',
@@ -427,43 +555,42 @@ const styles = StyleSheet.create({
   },
   arrow: {
     alignSelf: 'center',
+    marginBottom: 12,
   },
   routeSummaryContainer: {
     position: 'absolute',
-    bottom: 120,
+    bottom: 110,
     left: 0,
     right: 0,
-    maxHeight: 130,
-    zIndex: 11,
+    paddingHorizontal: 10,
   },
   routeSummary: {
     backgroundColor: 'white',
-    borderWidth: 2,
-    borderRadius: 15,
+    marginHorizontal: 6,
     padding: 10,
-    marginHorizontal: 8,
-    minWidth: 160,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  selectedRouteSummary: {
+    borderColor: '#007AFF',
+    borderWidth: 2,
+  },
+  routeSummaryText: {
+    fontWeight: '500',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  settingsButton: {
+    position: 'absolute',
+    bottom: 40,
+    right: 20,
+    backgroundColor: 'white',
+    padding: 12,
+    borderRadius: 30,
     elevation: 4,
     shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-  },
-  routeSummaryTitle: {
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  gearContainer: {
-    position: 'absolute',
-    top: 260,
-    right: 30,
-    zIndex: 15,
-  },
-  gearButton: {
-    backgroundColor: '#007AFF',
-    padding: 10,
-    borderRadius: 20,
-    elevation: 3,
-    alignItems: 'center',
-    justifyContent: 'center',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
   },
 });
