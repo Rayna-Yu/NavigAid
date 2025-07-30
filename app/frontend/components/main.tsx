@@ -86,6 +86,15 @@ export default function Main() {
   const [streetLamps, setStreetLamps] = useState<any>(null);
   const [trees, setTrees] = useState<any>(null);
   const [ramps, setRamps] = useState<any>(null);
+  const [selectedAttributes, setSelectedAttributes] = useState<string[]>([
+  'Good shade',
+  'Near By Pedestrian Ramp',
+  'damage',
+  'Narrow sidewalk',
+  'Steep slope',
+  'Poor lighting',
+  ]);
+
 
   // Load datasets on mount
   useEffect(() => {
@@ -245,7 +254,7 @@ export default function Main() {
     const goodShadeCount = flags.filter(f => f.issue.includes('Good shade')).length;
     const missingRampCount = flags.filter(f => f.issue.includes('Missing pedestrian ramp')).length;
 
-    const damage = damageCount > 3 ? 'high' : damageCount > 0 ? 'moderate' : 'low';
+    const damage = damageCount > 5 ? 'high' : damageCount > 0 ? 'moderate' : 'low';
     const slope = slopeCount > 0 ? 'steep' : 'ok';
     const lighting = poorLightingCount > 2 ? 'poor' : poorLightingCount > 0 ? 'moderate' : 'good';
     const treeCover = goodShadeCount > 5 ? 'dense' : goodShadeCount > 1 ? 'moderate' : 'none';
@@ -467,18 +476,22 @@ export default function Main() {
         )}
 
         {/* Markers for flagged points on selected route */}
-        {flags.map((flag, idx) => {
-          const { label, color } = iconForFlag(flag.issue);
-          return (
-            <Marker
-              key={`flag-${idx}`}
-              coordinate={flag.coord}
-              pinColor={color}
-              title={label}
-              description={flag.issue}
-            />
-          );
-        })}
+        {flags
+          .filter((flag) =>
+            selectedAttributes.some((attr) => flag.issue.includes(attr))
+          )
+          .map((flag, idx) => {
+            const { label, color } = iconForFlag(flag.issue);
+            return (
+              <Marker
+                key={`flag-${idx}`}
+                coordinate={flag.coord}
+                pinColor={color}
+                title={label}
+                description={flag.issue}
+              />
+            );
+          })}
       </MapView>
 
       <View style={styles.routeSummaryContainer}>
@@ -514,6 +527,8 @@ export default function Main() {
         onClose={() => setShowSettings(false)}
         mapType={mapType}
         setMapType={setMapType}
+        selectedAttributes={selectedAttributes}
+        setSelectedAttributes={setSelectedAttributes}
       />
     </View>
   );
