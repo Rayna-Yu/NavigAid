@@ -16,6 +16,7 @@ import polyline from 'polyline';
 import SettingsSheet from './settingsSheet';
 import * as FileSystem from 'expo-file-system';
 import { Asset } from 'expo-asset';
+import type { FeatureCollection } from 'geojson';
 
 import * as turf from '@turf/turf';
 
@@ -37,14 +38,30 @@ function formatDistance(meters: number) {
 }
 
 function iconForFlag(issue: string) {
-  if (issue.includes('damage')) return { label: 'Damage', color: 'red' };
+  if (issue.includes('Damage')) return { label: 'Damage', color: 'red' };
   if (issue.includes('Narrow sidewalk')) return { label: 'Narrow', color: 'purple' };
   if (issue.includes('Steep slope')) return { label: 'Steep', color: 'orange' };
   if (issue.includes('Poor lighting')) return { label: 'Lighting', color: 'gray' };
-  if (issue.includes('Good shade')) return { label: 'Shade', color: 'green' }; // TODO : same color as ramp
-  if (issue.includes('Near By Pedestrian Ramp')) return { label: 'Ramp', color: 'limegreen' };
-  return { label: 'Issue', color: 'black' };
+  if (issue.includes('High speed limit')) return {label: 'Speed', color: 'black'};
+  if (issue.includes('Good shade')) return { label: 'Shade', color: 'green' }; 
+  if (issue.includes('Near by pedestrian ramp')) return { label: 'Ramp', color: 'limegreen' };
+  return { label: 'Issue', color: 'white' };
 }
+
+function computeScore(flags: Flag[]): number {
+  let score = 0;
+  flags.forEach(f => {
+    if (f.issue.includes('Damage')) score += 5;
+    else if (f.issue.includes('Speed')) score += 5;
+    else if (f.issue.includes('Steep slope')) score += 3;
+    else if (f.issue.includes('Poor lighting')) score += 2;
+    else if (f.issue.includes('Narrow sidewalk')) score += 2;
+    else if (f.issue.includes('Good shade')) score -= 1; // reduce score (good)
+    else if (f.issue.includes('Ramp')) score -= 1;
+  });
+  return score;
+}
+
 
 type Flag = {
   index: number;
@@ -59,6 +76,7 @@ type RouteAccessibilitySummary = {
   lighting: 'poor' | 'moderate' | 'good';
   treeCover: 'none' | 'moderate' | 'dense';
   ramp: 'missing' | 'present';
+  speedLimit: 'low' | 'moderate' | 'high';
   width: 'narrow' | 'ok';
 };
 
@@ -82,14 +100,16 @@ export default function Main() {
   const [allFlags, setAllFlags] = useState<Flag[][]>([]);
   const mapRef = useRef<MapView>(null);
 
-  const [sidewalks, setSidewalks] = useState<any>(null);
-  const [streetLamps, setStreetLamps] = useState<any>(null);
-  const [trees, setTrees] = useState<any>(null);
-  const [ramps, setRamps] = useState<any>(null);
+  const [sidewalks, setSidewalks] = useState<FeatureCollection | null>(null);
+  const [streetLamps, setStreetLamps] = useState<FeatureCollection | null>(null);
+  const [trees, setTrees] = useState<FeatureCollection | null>(null);
+  const [ramps, setRamps] = useState<FeatureCollection | null>(null);
+  const [speedlimit, setSpeedLimits] = useState<FeatureCollection | null>(null);
   const [selectedAttributes, setSelectedAttributes] = useState<string[]>([
   'Good shade',
-  'Near By Pedestrian Ramp',
-  'damage',
+  'Near by pedestrian ramp',
+  'Damage',
+  'High speed limit',
   'Narrow sidewalk',
   'Steep slope',
   'Poor lighting',
@@ -123,6 +143,12 @@ export default function Main() {
         await rampsAsset.downloadAsync();
         const rampsStr = await FileSystem.readAsStringAsync(rampsAsset.localUri!);
         setRamps(JSON.parse(rampsStr));
+
+        // Speed limits
+        const speedAsset = Asset.fromModule(require('../../../assets/datasets/boston_speedlimit.geojson'));
+        await speedAsset.downloadAsync();
+        const speedStr = await FileSystem.readAsStringAsync(speedAsset.localUri!);
+        setSpeedLimits(JSON.parse(speedStr));
       } catch (err) {
         console.error('Failed to load datasets:', err);
       }
@@ -158,7 +184,8 @@ export default function Main() {
     sidewalkFeatures: any[],
     lampFeatures: any[],
     treeFeatures: any[],
-    rampFeatures: any[]
+    rampFeatures: any[],
+    speedFeatures: any[]
   ): Flag[] {
     const flags: Flag[] = [];
     const bufferDegrees = PROXIMITY_TOLERANCE_METERS / 111000;
@@ -179,6 +206,7 @@ export default function Main() {
     const filteredLamps = lampFeatures.filter(f => f.geometry && bboxIntersects(bufferedBbox, turf.bbox(f)));
     const filteredTrees = treeFeatures.filter(f => f.geometry && bboxIntersects(bufferedBbox, turf.bbox(f)));
     const filteredRamps = rampFeatures.filter(f => f.geometry && bboxIntersects(bufferedBbox, turf.bbox(f)));
+    const filteredSpeed = speedFeatures.filter(f => f.geometry && bboxIntersects(bufferedBbox, turf.bbox(f)));
 
     for (let i = 0; i < routeCoords.length; i++) {
       const coord = routeCoords[i];
@@ -236,7 +264,46 @@ export default function Main() {
       // Ramp flags
       const nearbyRampsCount = countNearbyFeatures(latLngPt, filteredRamps, PROXIMITY_TOLERANCE_METERS);
       if (nearbyRampsCount > 0) {
-        flags.push({ index: i, coord, issue: 'Near By Pedestrian Ramp' });
+        flags.push({ index: i, coord, issue: 'Near by pedestrian ramp' });
+      }
+
+      // Speed flags
+      for (const speedFeature of filteredSpeed) {
+        const speedStr = speedFeature.properties?.maxspeed;
+        if (!speedStr) continue;
+
+        const speedMatch = speedStr.match(/\d+/);
+        if (!speedMatch) continue;
+
+        const speed = parseInt(speedMatch[0], 10);
+        if (isNaN(speed)) continue;
+
+        const geom = speedFeature.geometry;
+        if (!geom) continue;
+
+        let isNearSpeedSegment = false;
+
+        if (geom.type === 'LineString') {
+          const lineGeom = turf.lineString(geom.coordinates);
+          const dist = turf.pointToLineDistance(pt, lineGeom, { units: 'meters' });
+          if (dist <= PROXIMITY_TOLERANCE_METERS) isNearSpeedSegment = true;
+        } else if (geom.type === 'MultiLineString') {
+          for (const coords of geom.coordinates) {
+            const multiLineGeom = turf.lineString(coords);
+            const dist = turf.pointToLineDistance(pt, multiLineGeom, { units: 'meters' });
+            if (dist <= PROXIMITY_TOLERANCE_METERS) {
+              isNearSpeedSegment = true;
+              break;
+            }
+          }
+        }
+
+        if (isNearSpeedSegment) {
+          if (speed > 25) { // adjust the max speed limit accordingly
+            flags.push({ index: i, coord, issue: `High speed limit (${speed} mph)` });
+          }
+          break;
+        }
       }
     }
 
@@ -244,30 +311,33 @@ export default function Main() {
   }
 
   // Summarize flags for UI
+  // TODO : edit the summary because this doesn't make sense right now
   function summarizeRouteFlags(flags: Flag[]): RouteAccessibilitySummary {
     const totalFlags = flags.length;
 
-    const damageCount = flags.filter(f => f.issue.includes('damage')).length;
+    const damageCount = flags.filter(f => f.issue.includes('Poor sidewalk condition')).length;
     const narrowCount = flags.filter(f => f.issue.includes('Narrow sidewalk')).length;
     const slopeCount = flags.filter(f => f.issue.includes('Steep slope')).length;
     const poorLightingCount = flags.filter(f => f.issue.includes('Poor lighting')).length;
     const goodShadeCount = flags.filter(f => f.issue.includes('Good shade')).length;
     const missingRampCount = flags.filter(f => f.issue.includes('Missing pedestrian ramp')).length;
+    const speedLimitCount = flags.filter(f => f.issue.includes('High speed limit')).length;
 
-    const damage = damageCount > 5 ? 'high' : damageCount > 0 ? 'moderate' : 'low';
+    const damage = damageCount > 5 ? 'high' : damageCount > 3 ? 'moderate' : 'low';
     const slope = slopeCount > 0 ? 'steep' : 'ok';
     const lighting = poorLightingCount > 2 ? 'poor' : poorLightingCount > 0 ? 'moderate' : 'good';
     const treeCover = goodShadeCount > 5 ? 'dense' : goodShadeCount > 1 ? 'moderate' : 'none';
     const ramp = missingRampCount > 3 ? 'missing' : 'present';
     const width = narrowCount > 2 ? 'narrow' : 'ok';
+    const speedLimit = speedLimitCount > 5 ? 'high' : speedLimitCount > 3 ? 'moderate' : 'low';
 
-    return { totalFlags, damage, slope, lighting, treeCover, ramp, width };
+    return { totalFlags, damage, slope, lighting, treeCover, ramp, speedLimit, width, };
   }
 
   // Fetch routes when coords change
   useEffect(() => {
     async function fetchRoute() {
-      if (!fromCoords || !toCoords || !sidewalks?.features || !streetLamps?.features || !trees?.features || !ramps?.features) {
+      if (!fromCoords || !toCoords || !sidewalks?.features || !streetLamps?.features || !trees?.features || !ramps?.features || !speedlimit?.features) {
         setRoutes([]);
         setRouteSummaries([]);
         setRouteAccessibilitySummaries([]);
@@ -310,12 +380,12 @@ export default function Main() {
           });
 
           const flaggedRoutes = decodedRoutes.map((coords: LatLng[], idx: number) => {
-            const flagList = flagRoute(coords, sidewalks.features, streetLamps.features, trees.features, ramps.features);
+            const flagList = flagRoute(coords, sidewalks.features, streetLamps.features, trees.features, ramps.features, speedlimit.features);
             return {
               index: idx,
               coords,
               flags: flagList,
-              score: flagList.length, // TODO : better scoring
+              score: computeScore(flagList),
             };
           });
 
@@ -367,7 +437,7 @@ export default function Main() {
     }
 
     fetchRoute();
-  }, [fromCoords, toCoords, sidewalks, streetLamps, trees, ramps]);
+  }, [fromCoords, toCoords, sidewalks, streetLamps, trees, ramps, speedlimit]);
 
   // Update flags when selected route changes
   useEffect(() => {
@@ -508,7 +578,7 @@ export default function Main() {
               <Text style={styles.routeSummaryText}>
                 Distance: {formatDistance(summary.distance)} {'\n'}
                 Duration: {formatDuration(summary.duration)} {'\n'}
-                Number of Flags: {summary.score} 
+                Route Score: {summary.score}
               </Text>
             </TouchableOpacity>
           ))}
