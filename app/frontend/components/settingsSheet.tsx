@@ -15,7 +15,7 @@ const mapTypes = ['standard', 'satellite', 'hybrid', 'terrain'] as const;
 const attributeOptions = [
   'Good shade',
   'Near by pedestrian ramp',
-  'Damage',
+  'Poor sidewalk condition',
   'High speed limit',
   'Narrow sidewalk',
   'Steep slope',
