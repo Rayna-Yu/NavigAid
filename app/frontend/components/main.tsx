@@ -14,15 +14,14 @@ import type { RootStackParamList } from '../../../App';
 import Constants from 'expo-constants';
 import polyline from 'polyline';
 import SettingsSheet from './settingsSheet';
-import * as FileSystem from 'expo-file-system';
-import { Asset } from 'expo-asset';
-import type { FeatureCollection } from 'geojson';
 import { Flag } from '../types';
-import { flagRoute } from '../utils/flagService'
+import { flagRoute } from '../utils/flagService';
+import * as turf from '@turf/turf';
 
 
 const ORS_API_KEY = Constants.expoConfig?.extra?.OPEN_ROUTE_SERVICE_API_KEY;
 const ROUTE_COLORS = ['#007AFF', '#ADD8E6'];
+const PROXIMITY_TOLERANCE_METERS = 10;
 
 function formatDuration(seconds: number) {
   if (seconds < 60) return `${Math.round(seconds)} sec`;
@@ -42,26 +41,47 @@ function iconForFlag(issue: string) {
   if (issue.includes('Narrow sidewalk')) return { label: 'Narrow', color: 'purple' };
   if (issue.includes('Steep slope')) return { label: 'Steep', color: 'orange' };
   if (issue.includes('Poor lighting')) return { label: 'Lighting', color: 'gray' };
-  if (issue.includes('High speed limit')) return {label: 'Speed', color: 'black'};
+  if (issue.includes('High speed limit')) return {label: 'Speed', color: 'black' };
   if (issue.includes('Good shade')) return { label: 'Shade', color: 'green' }; 
   if (issue.includes('Near by pedestrian ramp')) return { label: 'Ramp', color: 'limegreen' };
+  if (issue.includes('Tree hazard')) return { label: 'Hazard', color: 'blue' };
+  if (issue.includes('No sidewalk')) return { label: 'No sidewalk', color: 'yellow'};
   return { label: 'Issue', color: 'white' };
 }
 
 function computeScore(flags: Flag[]): number {
   let score = 0;
   flags.forEach(f => {
-    if (f.issue.includes('Poor sidewalk condition')) score += 5;
-    else if (f.issue.includes('Speed')) score += 5;
+    if (f.issue.includes('No sidewalk')) score += 7;
+    else if (f.issue.includes('Poor sidewalk condition')) score += 5;
+    else if (f.issue.includes('High speed limit')) score += 5;
     else if (f.issue.includes('Steep slope')) score += 3;
+    else if (f.issue.includes('Tree hazard')) score += 3;
     else if (f.issue.includes('Poor lighting')) score += 2;
     else if (f.issue.includes('Narrow sidewalk')) score += 2;
     else if (f.issue.includes('Good shade')) score -= 1;
-    else if (f.issue.includes('Ramp')) score -= 1;
+    else if (f.issue.includes('Near by pedestrian ramp')) score -= 2;
   });
   return score;
 }
 
+function encodeGeometry(bbox: number[]) {
+  const [xmin, ymin, xmax, ymax] = bbox;
+  return encodeURIComponent(JSON.stringify({
+    xmin, ymin, xmax, ymax,
+    spatialReference: { wkid: 4326 }
+  }));
+}
+
+async function fetchArcGISLayerWithinBbox(layerBaseUrl: string, bbox: number[]) {
+  const geom = encodeGeometry(bbox);
+  const url = `${layerBaseUrl}/query?where=1=1&geometry=${geom}&geometryType=esriGeometryEnvelope&spatialRel=esriSpatialRelIntersects&outFields=*&f=geojson`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`ArcGIS fetch failed: ${res.status}`);
+  return res.json();
+}
+
+// TODO : add the added datasets to summary
 type RouteAccessibilitySummary = {
   totalFlags: number;
   damage: 'low' | 'moderate' | 'high';
@@ -91,12 +111,6 @@ export default function Main() {
   const [flags, setFlags] = useState<Flag[]>([]);
   const [allFlags, setAllFlags] = useState<Flag[][]>([]);
   const mapRef = useRef<MapView>(null);
-
-  const [sidewalks, setSidewalks] = useState<FeatureCollection | null>(null);
-  const [streetLamps, setStreetLamps] = useState<FeatureCollection | null>(null);
-  const [trees, setTrees] = useState<FeatureCollection | null>(null);
-  const [ramps, setRamps] = useState<FeatureCollection | null>(null);
-  const [speedlimit, setSpeedLimits] = useState<FeatureCollection | null>(null);
   const [selectedAttributes, setSelectedAttributes] = useState<string[]>([
   'Good shade',
   'Near by pedestrian ramp',
@@ -105,49 +119,12 @@ export default function Main() {
   'Narrow sidewalk',
   'Steep slope',
   'Poor lighting',
+  'Tree hazard',
+  'No sidewalk'
   ]);
 
-  useEffect(() => {
-    const loadDatasets = async () => {
-      try {
-        // Sidewalks
-        const sidewalksAsset = Asset.fromModule(require('../../../assets/datasets/sidewalks.geojson'));
-        await sidewalksAsset.downloadAsync();
-        const sidewalksStr = await FileSystem.readAsStringAsync(sidewalksAsset.localUri!);
-        setSidewalks(JSON.parse(sidewalksStr));
-
-        // Street lamps
-        const lampsAsset = Asset.fromModule(require('../../../assets/datasets/streetlight_locations.geojson'));
-        await lampsAsset.downloadAsync();
-        const lampsStr = await FileSystem.readAsStringAsync(lampsAsset.localUri!);
-        setStreetLamps(JSON.parse(lampsStr));
-
-        // Trees
-        const treesAsset = Asset.fromModule(require('../../../assets/datasets/trees_data.geojson'));
-        await treesAsset.downloadAsync();
-        const treesStr = await FileSystem.readAsStringAsync(treesAsset.localUri!);
-        setTrees(JSON.parse(treesStr));
-
-        // Pedestrian ramps
-        const rampsAsset = Asset.fromModule(require('../../../assets/datasets/pedestrian_ramp_inventory.geojson'));
-        await rampsAsset.downloadAsync();
-        const rampsStr = await FileSystem.readAsStringAsync(rampsAsset.localUri!);
-        setRamps(JSON.parse(rampsStr));
-
-        // Speed limits
-        const speedAsset = Asset.fromModule(require('../../../assets/datasets/boston_speedlimit.geojson'));
-        await speedAsset.downloadAsync();
-        const speedStr = await FileSystem.readAsStringAsync(speedAsset.localUri!);
-        setSpeedLimits(JSON.parse(speedStr));
-      } catch (err) {
-        console.error('Failed to load datasets:', err);
-      }
-    };
-    loadDatasets();
-  }, []);
-
   // Summarize flags for UI
-  // TODO : edit the summary because this doesn't make sense right now
+  // TODO : edit the summaries to include breakdown of flags
   function summarizeRouteFlags(flags: Flag[]): RouteAccessibilitySummary {
     const totalFlags = flags.length;
 
@@ -173,7 +150,7 @@ export default function Main() {
   // Fetch routes when coords change
   useEffect(() => {
     async function fetchRoute() {
-      if (!fromCoords || !toCoords || !sidewalks?.features || !streetLamps?.features || !trees?.features || !ramps?.features || !speedlimit?.features) {
+      if (!fromCoords || !toCoords) {
         setRoutes([]);
         setRouteSummaries([]);
         setRouteAccessibilitySummaries([]);
@@ -215,17 +192,79 @@ export default function Main() {
             }));
           });
 
-          const flaggedRoutes = decodedRoutes.map((coords: LatLng[], idx: number) => {
-            const flagList = flagRoute(coords, sidewalks.features, streetLamps.features, trees.features, ramps.features, speedlimit.features);
+          function getUnionBufferedBbox(routes: LatLng[][], bufferMeters = PROXIMITY_TOLERANCE_METERS) {
+            const allCoords = routes.flat();
+            const line = turf.lineString(allCoords.map(c => [c.longitude, c.latitude]));
+            const bbox = turf.bbox(line);
+            const bufferDegrees = bufferMeters / 111000;        
+            return [
+              bbox[0] - bufferDegrees,
+              bbox[1] - bufferDegrees,
+              bbox[2] + bufferDegrees,
+              bbox[3] + bufferDegrees
+            ];
+          }
+
+          // get bbox of the three routes
+          const unionBbox = getUnionBufferedBbox(decodedRoutes);
+          const [
+            sidewalks,
+            streetLamps,
+            trees,
+            ramps,
+            treeHazard,
+            speedlimit,
+            sdwCenterline
+          ] = await Promise.all([
+            fetchArcGISLayerWithinBbox(
+              "https://gisportal.boston.gov/arcgis/rest/services/Infrastructure/OpenData/MapServer/0",
+              unionBbox
+            ),
+            fetchArcGISLayerWithinBbox(
+              "https://gisportal.boston.gov/arcgis/rest/services/Infrastructure/OpenData/MapServer/11",
+              unionBbox
+            ),
+            fetchArcGISLayerWithinBbox(
+              "https://services.arcgis.com/sFnw0xNflSi8J0uh/ArcGIS/rest/services/BPRD_Trees/FeatureServer/0",
+              unionBbox
+            ),
+            fetchArcGISLayerWithinBbox(
+              "https://gisportal.boston.gov/arcgis/rest/services/Infrastructure/OpenData/MapServer/3",
+              unionBbox
+            ),
+            fetchArcGISLayerWithinBbox(
+              "https://services.arcgis.com/sFnw0xNflSi8J0uh/ArcGIS/rest/services/Sidewalk_TreeHazard_Points/FeatureServer/0",
+              unionBbox
+            ),
+            fetchArcGISLayerWithinBbox(
+              "https://gisportal.boston.gov/arcgis/rest/services/Infrastructure/OpenData/MapServer/8",
+              unionBbox
+            ),
+            fetchArcGISLayerWithinBbox(
+              "https://gisportal.boston.gov/arcgis/rest/services/Infrastructure/OpenData/MapServer/5",
+              unionBbox
+            )
+          ]);
+
+          const flaggedRoutes = await Promise.all(decodedRoutes.map(async (coords: LatLng[], idx: number) => {
+            const flagList = flagRoute(
+              coords, 
+              sidewalks.features, 
+              streetLamps.features, 
+              trees.features, 
+              ramps.features, 
+              treeHazard.features, 
+              speedlimit.features, 
+              sdwCenterline.features);
             return {
               index: idx,
               coords,
               flags: flagList,
               score: computeScore(flagList),
             };
-          });
+          }));
 
-          // Sort by least issues
+          // Sort by score (least to greatest)
           const bestThree = flaggedRoutes.sort((a, b) => a.score - b.score).slice(0, 3);
 
           const summaries = bestThree.map(r => {
@@ -273,7 +312,7 @@ export default function Main() {
     }
 
     fetchRoute();
-  }, [fromCoords, toCoords, sidewalks, streetLamps, trees, ramps, speedlimit]);
+  }, [fromCoords, toCoords]);
 
   // Update flags when selected route changes
   useEffect(() => {

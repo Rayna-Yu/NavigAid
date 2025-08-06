@@ -12,6 +12,7 @@ type SettingsSheetProps = {
 
 const mapTypes = ['standard', 'satellite', 'hybrid', 'terrain'] as const;
 
+// TODO : show the colors assosiated which each attribute
 const attributeOptions = [
   'Good shade',
   'Near by pedestrian ramp',
@@ -20,6 +21,8 @@ const attributeOptions = [
   'Narrow sidewalk',
   'Steep slope',
   'Poor lighting',
+  'Tree hazard',
+  'No sidewalk'
 ];
 
 export default function SettingsSheet({
