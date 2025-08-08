@@ -21,7 +21,6 @@ const attributeOptions = [
   'Narrow sidewalk',
   'Steep slope',
   'Poor lighting',
-  'Tree hazard',
   'No sidewalk'
 ];
 

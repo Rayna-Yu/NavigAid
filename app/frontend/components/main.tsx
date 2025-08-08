@@ -44,7 +44,6 @@ function iconForFlag(issue: string) {
   if (issue.includes('High speed limit')) return {label: 'Speed', color: 'black' };
   if (issue.includes('Good shade')) return { label: 'Shade', color: 'green' }; 
   if (issue.includes('Near by pedestrian ramp')) return { label: 'Ramp', color: 'limegreen' };
-  if (issue.includes('Tree hazard')) return { label: 'Hazard', color: 'blue' };
   if (issue.includes('No sidewalk')) return { label: 'No sidewalk', color: 'yellow'};
   return { label: 'Issue', color: 'white' };
 }
@@ -56,7 +55,6 @@ function computeScore(flags: Flag[]): number {
     else if (f.issue.includes('Poor sidewalk condition')) score += 5;
     else if (f.issue.includes('High speed limit')) score += 5;
     else if (f.issue.includes('Steep slope')) score += 3;
-    else if (f.issue.includes('Tree hazard')) score += 3;
     else if (f.issue.includes('Poor lighting')) score += 2;
     else if (f.issue.includes('Narrow sidewalk')) score += 2;
     else if (f.issue.includes('Good shade')) score -= 1;
@@ -119,7 +117,6 @@ export default function Main() {
   'Narrow sidewalk',
   'Steep slope',
   'Poor lighting',
-  'Tree hazard',
   'No sidewalk'
   ]);
 
@@ -212,7 +209,6 @@ export default function Main() {
             streetLamps,
             trees,
             ramps,
-            treeHazard,
             speedlimit,
             sdwCenterline
           ] = await Promise.all([
@@ -233,11 +229,7 @@ export default function Main() {
               unionBbox
             ),
             fetchArcGISLayerWithinBbox(
-              "https://services.arcgis.com/sFnw0xNflSi8J0uh/ArcGIS/rest/services/Sidewalk_TreeHazard_Points/FeatureServer/0",
-              unionBbox
-            ),
-            fetchArcGISLayerWithinBbox(
-              "https://gisportal.boston.gov/arcgis/rest/services/Infrastructure/OpenData/MapServer/8",
+              "https://gisportal.boston.gov/arcgis/rest/services/SAM/Live_SAM_Address/FeatureServer/3",
               unionBbox
             ),
             fetchArcGISLayerWithinBbox(
@@ -253,7 +245,6 @@ export default function Main() {
               streetLamps.features, 
               trees.features, 
               ramps.features, 
-              treeHazard.features, 
               speedlimit.features, 
               sdwCenterline.features);
             return {

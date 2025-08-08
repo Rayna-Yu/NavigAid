@@ -19,6 +19,7 @@
     "expo-status-bar": "~2.2.3",
     "geolib": "^3.3.4",
     "maps": "^0.3.3",
+    "openrouteservice": "^0.1.2",
     "polyline": "^0.2.0",
     "react": "19.0.0",
     "react-native": "^0.79.5",

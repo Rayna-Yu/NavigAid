@@ -11,13 +11,11 @@ export function flagRoute(
   lampFeatures: any[] = [],
   treeFeatures: any[] = [],
   rampFeatures: any[] = [],
-  hazardFeatures: any[] = [],
   speedFeatures: any[] = [],
   centerlineFeatures: any[] = []
 ): Flag[] {
   const flags: Flag[] = [];
 
-  // Precompute turf points for route coordinates (avoid re-creating inside loops)
   const routePoints = routeCoords.map(c => ({
     coord: c,
     pt: turf.point([c.longitude, c.latitude]),
@@ -87,12 +85,6 @@ export function flagRoute(
     const nearbyRampsCount = countNearbyFeaturesByDistance(pt, rampFeatures, PROXIMITY_TOLERANCE_METERS);
     if (nearbyRampsCount > 0) {
       flags.push({ index: i, coord, issue: 'Near by pedestrian ramp' });
-    }
-
-    // tree hazard
-    const nearbyHazards = countNearbyFeaturesByDistance(pt, hazardFeatures, PROXIMITY_TOLERANCE_METERS);
-    if (nearbyHazards > 0) {
-      flags.push({ index: i, coord, issue: 'Tree hazard near sidewalk' });
     }
 
     // speed limit
