@@ -21,7 +21,8 @@ const attributeOptions = [
   'Narrow sidewalk',
   'Steep slope',
   'Poor lighting',
-  'No sidewalk'
+  'No sidewalk',
+  'Nearby crosswalk'
 ];
 
 export default function SettingsSheet({

@@ -15,8 +15,9 @@ import Constants from 'expo-constants';
 import polyline from 'polyline';
 import SettingsSheet from './settingsSheet';
 import { Flag } from '../types';
-import { flagRoute } from '../utils/flagService';
+import { analyzeRoute } from '../utils/flagService';
 import * as turf from '@turf/turf';
+import { computeScore } from '../utils/computeScore'
 
 
 const ORS_API_KEY = Constants.expoConfig?.extra?.OPEN_ROUTE_SERVICE_API_KEY;
@@ -44,23 +45,9 @@ function iconForFlag(issue: string) {
   if (issue.includes('High speed limit')) return {label: 'Speed', color: 'black' };
   if (issue.includes('Good shade')) return { label: 'Shade', color: 'green' }; 
   if (issue.includes('Near by pedestrian ramp')) return { label: 'Ramp', color: 'limegreen' };
-  if (issue.includes('No sidewalk')) return { label: 'No sidewalk', color: 'yellow'};
+  if (issue.includes('No sidewalk')) return { label: 'No sidewalk', color: 'yellow' };
+  if (issue.includes('Nearby crosswalk')) return { label: 'Nearby crosswalk', color: 'blue' }
   return { label: 'Issue', color: 'white' };
-}
-
-function computeScore(flags: Flag[]): number {
-  let score = 0;
-  flags.forEach(f => {
-    if (f.issue.includes('No sidewalk')) score += 7;
-    else if (f.issue.includes('Poor sidewalk condition')) score += 5;
-    else if (f.issue.includes('High speed limit')) score += 5;
-    else if (f.issue.includes('Steep slope')) score += 3;
-    else if (f.issue.includes('Poor lighting')) score += 2;
-    else if (f.issue.includes('Narrow sidewalk')) score += 2;
-    else if (f.issue.includes('Good shade')) score -= 1;
-    else if (f.issue.includes('Near by pedestrian ramp')) score -= 2;
-  });
-  return score;
 }
 
 function encodeGeometry(bbox: number[]) {
@@ -89,6 +76,7 @@ type RouteAccessibilitySummary = {
   ramp: 'missing' | 'present';
   speedLimit: 'low' | 'moderate' | 'high';
   width: 'narrow' | 'ok';
+  crosswalk: 'missing' | 'present';
 };
 
 export default function Main() {
@@ -117,7 +105,8 @@ export default function Main() {
   'Narrow sidewalk',
   'Steep slope',
   'Poor lighting',
-  'No sidewalk'
+  'No sidewalk',
+  'Nearby crosswalk'
   ]);
 
   // Summarize flags for UI
@@ -132,6 +121,7 @@ export default function Main() {
     const goodShadeCount = flags.filter(f => f.issue.includes('Good shade')).length;
     const missingRampCount = flags.filter(f => f.issue.includes('Missing pedestrian ramp')).length;
     const speedLimitCount = flags.filter(f => f.issue.includes('High speed limit')).length;
+    const crossWalkCount = flags.filter(f => f.issue.includes('Nearby crosswalk')).length;
 
     const damage = damageCount > 5 ? 'high' : damageCount > 3 ? 'moderate' : 'low';
     const slope = slopeCount > 0 ? 'steep' : 'ok';
@@ -140,8 +130,9 @@ export default function Main() {
     const ramp = missingRampCount > 3 ? 'missing' : 'present';
     const width = narrowCount > 2 ? 'narrow' : 'ok';
     const speedLimit = speedLimitCount > 5 ? 'high' : speedLimitCount > 3 ? 'moderate' : 'low';
+    const crosswalk = crossWalkCount > 0 ? 'present' : 'missing';
 
-    return { totalFlags, damage, slope, lighting, treeCover, ramp, speedLimit, width, };
+    return { totalFlags, damage, slope, lighting, treeCover, ramp, speedLimit, width, crosswalk };
   }
 
   // Fetch routes when coords change
@@ -239,19 +230,22 @@ export default function Main() {
           ]);
 
           const flaggedRoutes = await Promise.all(decodedRoutes.map(async (coords: LatLng[], idx: number) => {
-            const flagList = flagRoute(
+            const { flags, featureMatrix, isNight } = analyzeRoute(
               coords, 
-              sidewalks.features, 
-              streetLamps.features, 
-              trees.features, 
-              ramps.features, 
-              speedlimit.features, 
-              sdwCenterline.features);
+              {
+                sidewalkFeatures: sidewalks.features, 
+                lampFeatures: streetLamps.features, 
+                treeFeatures: trees.features, 
+                rampFeatures: ramps.features, 
+                speedFeatures: speedlimit.features, 
+                centerlineFeatures: sdwCenterline.features
+              }
+            );
             return {
               index: idx,
               coords,
-              flags: flagList,
-              score: computeScore(flagList),
+              flags: flags,
+              score: computeScore(featureMatrix, isNight)
             };
           }));
 
