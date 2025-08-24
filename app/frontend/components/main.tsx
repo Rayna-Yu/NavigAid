@@ -241,11 +241,12 @@ export default function Main() {
                 centerlineFeatures: sdwCenterline.features
               }
             );
+            const score = await computeScore(featureMatrix, isNight);
             return {
               index: idx,
               coords,
               flags: flags,
-              score: computeScore(featureMatrix, isNight)
+              score: score,
             };
           }));
 
@@ -460,6 +461,12 @@ export default function Main() {
         selectedAttributes={selectedAttributes}
         setSelectedAttributes={setSelectedAttributes}
       />
+
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>
+          © openrouteservice.org by HeiGIT | Map data © OpenStreetMap contributors
+        </Text>
+      </View>
     </View>
   );
 }
@@ -537,5 +544,17 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 8,
+  },
+  footer: {
+    position: 'absolute',
+    bottom: 10,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  footerText: {
+    fontSize: 10,
+    color: '#555',
+    textAlign: 'center',
   },
 });

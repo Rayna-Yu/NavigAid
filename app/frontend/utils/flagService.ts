@@ -46,7 +46,7 @@ export function analyzeRoute(
     rawMatrix.push(row);
 
     const width = features.narrow_sidewalk;
-    if (width != null && width > 0 && width < 5) {
+    if (width != null && width > 0 && width < 10) {
       flags.push({ index: i, coord, issue: `Narrow sidewalk (${width} ft)`, value: width });
     }
 
@@ -65,7 +65,7 @@ export function analyzeRoute(
     }
 
     const tree = features.tree;
-    if (tree != null && tree >= 3) {
+    if (tree != null && tree >= 0) {
       flags.push({ index: i, coord, issue: 'Good shade (tree canopy)', value: tree });
     }
 

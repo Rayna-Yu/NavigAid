@@ -27,7 +27,7 @@ export async function computeScore(
       throw new Error('Invalid response format');
     }
 
-    return result.average_crash_probability;
+    return Number(result.sum_probability.toFixed(2));
   } catch (err) {
     console.error('Error computing score:', err);
     return 0;
