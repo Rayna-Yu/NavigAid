@@ -6,17 +6,36 @@ type SettingsSheetProps = {
   onClose: () => void;
   mapType: 'standard' | 'satellite' | 'hybrid' | 'terrain';
   setMapType: (type: 'standard' | 'satellite' | 'hybrid' | 'terrain') => void;
+  selectedAttributes: string[];
+  setSelectedAttributes: (attributes: string[]) => void;
 };
 
 const mapTypes = ['standard', 'satellite', 'hybrid', 'terrain'] as const;
+
+// TODO : show the colors assosiated which each attribute
+const attributeOptions = [
+  'Good shade',
+  'Near by pedestrian ramp',
+  'Poor sidewalk condition',
+  'High speed limit',
+  'Narrow sidewalk',
+  'Steep slope',
+  'Poor lighting',
+  'No sidewalk',
+  'Nearby crosswalk'
+];
 
 export default function SettingsSheet({
   visible,
   onClose,
   mapType,
   setMapType,
+  selectedAttributes,
+  setSelectedAttributes,
 }: SettingsSheetProps) {
   if (!visible) return null;
+
+  const allSelected = selectedAttributes.length === attributeOptions.length;
 
   return (
     <Modal animationType="slide" transparent visible={visible}>
@@ -40,6 +59,43 @@ export default function SettingsSheet({
               </Text>
             </TouchableOpacity>
           ))}
+
+          <Text style={styles.title}>Filter Flags</Text>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity
+              onPress={() => setSelectedAttributes([...attributeOptions])}
+              style={styles.smallButton}
+            >
+              <Text style={styles.smallButtonText}>Select All</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setSelectedAttributes([])}
+              style={styles.smallButton}
+            >
+              <Text style={styles.smallButtonText}>Clear All</Text>
+            </TouchableOpacity>
+          </View>
+
+          {attributeOptions.map((attribute) => {
+            const isSelected = selectedAttributes.includes(attribute);
+            return (
+              <TouchableOpacity
+                key={attribute}
+                onPress={() => {
+                  const updated = isSelected
+                    ? selectedAttributes.filter((a) => a !== attribute)
+                    : [...selectedAttributes, attribute];
+                  setSelectedAttributes(updated);
+                }}
+                style={[styles.option, isSelected && styles.selectedOption]}
+              >
+                <Text style={isSelected ? styles.selectedText : styles.optionText}>
+                  {attribute}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+
           <TouchableOpacity onPress={onClose} style={styles.closeButton}>
             <Text style={styles.closeText}>Close</Text>
           </TouchableOpacity>
@@ -92,5 +148,23 @@ const styles = StyleSheet.create({
   closeText: {
     color: '#007AFF',
     fontWeight: '600',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    gap: 10,
+    marginBottom: 10,
+    paddingHorizontal: 16,
+  },
+  smallButton: {
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  smallButtonText: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '500',
   },
 });
