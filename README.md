@@ -1,6 +1,6 @@
 ## NavigAid
 
-[insert tag line]
+A Route Analysis and Navigation Application for Pedestrian Safety in Boston
 
 ## To start
 ```bash
@@ -20,8 +20,8 @@ OPEN_ROUTE_SERVICE_API_KEY=your_key_here
 npx expo start
 ```
 
-Make sure you have expo go installed on your phone and scan the QR.
+Make sure you have Expo Go installed on your phone and scan the QR.
 You should now see the app on your phone
 
 ## Model
-The logistic regression model, data, and code can be found in this repo: https://github.com/Rayna-Yu/NavigAid-model
+The random forest model for the backend, data, and code can be found in this repo: https://github.com/Rayna-Yu/NavigAid-model
