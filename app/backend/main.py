@@ -29,7 +29,6 @@ def predict_route_safety(features: Features):
     model = night_model if features.is_night else day_model
 
     probs = model.predict_proba(X)[:, 1]
-    print(probs)
     route_score = float(np.mean(probs))
     sum_probability = np.sum(probs)
     max_probability = np.max(probs)
