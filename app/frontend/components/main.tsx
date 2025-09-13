@@ -348,7 +348,7 @@ export default function Main() {
           </Text>
         </TouchableOpacity>
 
-        <AntDesign name="arrowdown" size={24} color="black" style={styles.arrow} />
+        <AntDesign name="arrow-down" size={24} color="black" style={styles.arrow} />
 
         <Text style={styles.label}>To:</Text>
         <TouchableOpacity
